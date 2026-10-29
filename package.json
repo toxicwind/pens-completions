@@ -1,0 +1,9 @@
+{
+  "name": "pens-completions",
+  "version": "1.0.0",
+  "module": "server.ts",
+  "type": "module",
+  "scripts": {
+    "start": "bun server.ts"
+  }
+}
