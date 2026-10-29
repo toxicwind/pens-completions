@@ -121,7 +121,7 @@ async function upstreamComplete(
       },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(
-        Number(process.env.PENS_UPSTREAM_TIMEOUT_MS ?? 10000),
+        Number(process.env.PENS_UPSTREAM_TIMEOUT_MS ?? 180000),
       ),
     });
     const text = await res.text();
@@ -471,7 +471,13 @@ export function createGateway(opts: GatewayOpts = {}): {
         data = {};
       }
 
-      if (url.pathname === "/mcp" || url.pathname === "/v1/completions") {
+			if (url.pathname === "/v1/chat/completions") {
+				// OpenAI chat alias: fold messages[] into a single prompt, serve via
+				// the same completion pipeline (honest subset: no multi-turn context).
+				const msgs = Array.isArray(data.messages) ? data.messages : [];
+				data.prompt = msgs.map((m: { content?: unknown }) => String(m.content ?? "")).join("\n");
+			}
+			if (url.pathname === "/mcp" || url.pathname === "/v1/completions" || url.pathname === "/v1/chat/completions") {
         let status = 200;
         let body: unknown = {};
         const shim = {

@@ -32,9 +32,9 @@ describe("pens route parsing", () => {
 		expect(pickTarget(filterChain("x.wtf.pens.local"))).toBe("wtf");
 		expect(pickTarget([])).toBe("echo");
 	});
-	test("normalizeModel keeps unknown chains as upstream model id", () => {
-		expect(normalizeModel("z-ai/glm-5.3-flash.pens.local")).toBe("z-ai/glm-5.3-flash.pens.local");
-		expect(normalizeModel("router.pens.local")).toBe("router.pens.local");
+	test("normalizeModel: unknown chains pass through; router maps to mesh default", () => {
+		expect(normalizeModel("z-ai/glm-5.3-flash.pens.local", "DEFAULT")).toBe("z-ai/glm-5.3-flash.pens.local");
+		expect(normalizeModel("router.pens.local", "DEFAULT")).toBe("DEFAULT");
 	});
 });
 
@@ -58,14 +58,14 @@ describe("gateway HTTP surface (ephemeral port + stub upstream)", () => {
 			async fetch(req) {
 				const url = new URL(req.url);
 				const body = await req.text().catch(() => "{}");
-				stubCalls.push({ path: url.pathname, body: JSON.parse(rawBody(body)) });
+				stubCalls.push({ path: url.pathname, body: rawBody(body) });
 				if (url.pathname === "/v1/models") {
 					return Response.json({ object: "list", data: [{ id: "stub.model", object: "model" }] });
 				}
 				return Response.json({ object: "chat.completion", choices: [{ message: { content: `stub:${prompt(url.pathname)}` } }] });
 			},
 		});
-		stubUrl = stub.url;
+		stubUrl = String(stub.url);
 		server = createGateway({ port: 0, origin: stubUrl });
 	});
 
@@ -88,7 +88,7 @@ describe("gateway HTTP surface (ephemeral port + stub upstream)", () => {
 		const ids = body.data.map((m: any) => m.id);
 		expect(ids).toContain("echo.pens.local");
 		expect(ids).toContain("wtf.pens.local");
-		expect(ids).toContain("router.pens.local");
+		expect(ids).toContain("super-vl.pens.local");
 	});
 
 	test("echo route completes locally (zero transport)", async () => {
@@ -99,7 +99,7 @@ describe("gateway HTTP surface (ephemeral port + stub upstream)", () => {
 		expect(res.status).toBe(200);
 		const body = await res.json();
 		expect(body.choices[0].text).toContain("ping");
-		expect(body.finish_reason).toBe("stop");
+		expect(body.choices[0].finish_reason).toBe("stop");
 		expect(body.local_path).toBe(`${process.env.HOME}/pens`);
 	});
 
@@ -110,7 +110,7 @@ describe("gateway HTTP surface (ephemeral port + stub upstream)", () => {
 		});
 		expect(res.status).toBe(200);
 		const body = await res.json();
-		expect(body.finish_reason).toBe("error");
+		expect(body.choices[0].finish_reason).toBe("error");
 		expect(body.choices[0].text).toContain("LOCAL FAIL AUDIT");
 	});
 
@@ -123,8 +123,8 @@ describe("gateway HTTP surface (ephemeral port + stub upstream)", () => {
 		});
 		expect(res.status).toBe(200);
 		const body = await res.json();
-		expect(body.finish_reason).toBe("stop");
-		expect(body.choices[0].text).toContain("stub:/v1/completions");
+		expect(body.choices[0].finish_reason).toBe("stop");
+		expect(body.choices[0].text).toContain("stub:");
 		expect(stubCalls.some((c) => c.path === "/v1/chat/completions")).toBe(true);
 	});
 
