@@ -53,6 +53,7 @@ type Completion = {
   finish: "stop" | "error";
   model: string;
   auditedFail?: string;
+  plainTextLane?: boolean;
 };
 type Agent = (
   prompt: string,
@@ -88,7 +89,7 @@ type GatewayOpts = {
   defaultModel?: string;
 };
 
-function upstreamComplete(
+async function upstreamComplete(
   opts: GatewayOpts,
   prompt: string,
   model: string,
@@ -111,32 +112,38 @@ function upstreamComplete(
     max_tokens: budget,
     stream: false,
   };
-  return fetch(`${origin}/v1/chat/completions`, {
-    method: "POST",
-    headers: {
-      "content-type": "application/json",
-      authorization: `Bearer ${key}`,
-    },
-    body: JSON.stringify(body),
-    signal: AbortSignal.timeout(
-      Number(process.env.PENS_UPSTREAM_TIMEOUT_MS ?? 180000),
-    ),
-  })
-    .then((res) => res.text())
-    .then((text) => {
-      if (!res.ok) return Err(`upstream ${res.status}: ${text.slice(0, 300)}`);
-      const data = JSON.parse(text) as {
-        choices?: Array<{
-          message?: { content?: string };
-          finish_reason?: string;
-        }>;
-      };
-      const choice = data.choices?.[0];
-      if (!choice)
-        return Err(`upstream returned no choices: ${text.slice(0, 200)}`);
-      return Ok({ text: choice.message?.content ?? "", finish: "stop", model });
-    })
-    .catch((e) => Err(`upstream fetch failed: ${(e as Error).message}`));
+  try {
+    const res = await fetch(`${origin}/v1/chat/completions`, {
+      method: "POST",
+      headers: {
+        "content-type": "application/json",
+        authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(
+        Number(process.env.PENS_UPSTREAM_TIMEOUT_MS ?? 10000),
+      ),
+    });
+    const text = await res.text();
+    if (!res.ok) return Err(`upstream ${res.status}: ${text.slice(0, 300)}`);
+    // Some mesh lanes (per-model strike/queue states) answer 200 text/plain
+    // instead of OpenAI JSON (anomaly-15 class). Parse defensively; on a
+    // non-JSON 2xx, pass the body through honestly + mark finish "stop".
+    let data: { choices?: Array<{ message?: { content?: string }; finish_reason?: string }> };
+    try {
+      data = JSON.parse(text);
+    } catch {
+      const trimmed = text.trim();
+      if (!trimmed) return Err("upstream 2xx with empty body (exec-lane defect)");
+      return Ok({ text: trimmed, finish: "stop", model, plainTextLane: true });
+    }
+    const choice = data.choices?.[0];
+    if (!choice)
+      return Err(`upstream returned no choices: ${text.slice(0, 200)}`);
+    return Ok({ text: choice.message?.content ?? "", finish: "stop", model });
+  } catch (e) {
+    return Err(`upstream fetch failed: ${(e as Error).message}`);
+  }
 }
 
 /** router.pens.local: pens-path routing. Last non-meta chain element picks the agent. */
